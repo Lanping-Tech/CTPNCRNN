@@ -1,0 +1,11 @@
+*/__pycache__/*
+datasets/*
+*.pyc
+*.pyd
+*.pyx
+result/*
+*.so
+*.lib
+*.exp
+.DS_Store
+utils/bbox/.fuse_hidden0000c4ff00000003
