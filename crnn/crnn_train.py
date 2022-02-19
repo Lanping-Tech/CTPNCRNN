@@ -3,10 +3,10 @@ import torch
 import torchvision
 import numpy as np
 
-from Chinese_alphabet import alphabet
-import crnn_utils as utils
-from crnn_model import CRNN
-from crnn_config import *
+from crnn.Chinese_alphabet import alphabet
+import crnn.crnn_utils as utils
+from crnn.crnn_model import CRNN
+from crnn.crnn_config import *
 
 class CRNN_Trainer:
     def __init__(self):
@@ -35,6 +35,8 @@ class CRNN_Trainer:
             sub_img = sub_img.astype(np.uint8)
             sub_img = self.data_transforms(sub_img)
             sub_imgs.append(sub_img)
+
+        print(len(sub_imgs))
 
         batch_size = len(sub_imgs)
         sub_imgs = torch.stack(sub_imgs)

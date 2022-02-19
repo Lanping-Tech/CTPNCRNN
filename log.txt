@@ -1,0 +1,3 @@
+Total loss	Classified loss	Y location loss	X Refine loss	Learning Rate	CRNN Loss	
+1.144560	0.992510	0.152050	0.000000	0.001000	0.000000	
+0.763374	0.647016	0.116358	0.000000	0.001000	0.000000	

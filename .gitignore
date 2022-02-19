@@ -9,3 +9,9 @@ result/*
 *.exp
 .DS_Store
 utils/bbox/.fuse_hidden0000c4ff00000003
+result_fg.jpg
+utils/bbox/dist/UNKNOWN-0.0.0-py3.8-macosx-10.9-x86_64.egg
+utils/bbox/UNKNOWN.egg-info/dependency_links.txt
+utils/bbox/UNKNOWN.egg-info/PKG-INFO
+utils/bbox/UNKNOWN.egg-info/SOURCES.txt
+utils/bbox/UNKNOWN.egg-info/top_level.txt

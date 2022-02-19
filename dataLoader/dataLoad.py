@@ -20,7 +20,7 @@ import os
 # ic15_train_gt_dir = ic15_root_dir + 'train_gt/'
 
 
-ic15_root_dir = 'datasets/icdar/train'
+ic15_root_dir = 'datasets/icdar/train/'
 ic15_train_data_dir = ic15_root_dir + 'image/'
 ic15_train_gt_dir = ic15_root_dir + 'label/'
 

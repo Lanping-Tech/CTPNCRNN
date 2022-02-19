@@ -15,11 +15,21 @@ from torch import optim
 import numpy as np
 from torch.autograd import Variable
 from torchvision.transforms import transforms
-from dataLoader.dataLoad import IC15Loader,get_bboxes
+from dataLoader.dataLoad import IC15Loader,get_bboxes, get_bboxes_crnn, iou_crnn
 from models.loss import CTPNLoss
 from models.ctpn import CTPN_Model
 from utils.rpn_msr.anchor_target_layer import anchor_target_layer
 from tools.Log import Logger
+
+import torch.nn.functional as F
+
+from utils.rpn_msr.proposal_layer import proposal_layer
+from utils.text_connector.detectors import TextDetector
+
+from crnn.crnn_train import CRNN_Trainer
+
+from inference import resize_image as resize_image_i
+from inference import toTensorImage as toTensorImage_i
 
 random_seed = 2020
 torch.random.manual_seed(random_seed)
@@ -34,7 +44,7 @@ def toTensor(item):
 def main(args):
     
     log_write = Logger('./log.txt', 'LogFile')
-    log_write.set_names(['Total loss', 'Classified loss','Y location loss','X Refine loss','Learning Rate'])
+    log_write.set_names(['Total loss', 'Classified loss','Y location loss','X Refine loss','Learning Rate', 'CRNN Loss'])
     
     data_loader = IC15Loader(args.size_list)
     gt_files = data_loader.gt_paths
@@ -61,12 +71,15 @@ def main(args):
 
     model.train()
 
+    crnn_trainer = CRNN_Trainer()
+
     for epoch in range(args.train_epochs):
 
         loss_total_list = []
         loss_cls_list = []
         loss_ver_list = []
         loss_refine_list = []
+        loss_crnn_list = []
 
         for batch_idx, (imgs, img_scales,im_shapes, gt_path_indexs,im_infos) in enumerate(train_loader):
 
@@ -90,6 +103,7 @@ def main(args):
             batch_loss_cls = []
             batch_loss_ver = []
             batch_loss_refine = []
+            batch_loss_crnn = []
             for i in range(image.shape[0]):
 
                 image_ori =  (imgs[i].numpy()*255).transpose((1,2,0)).copy()
@@ -116,10 +130,45 @@ def main(args):
                 del(loss_ver)
                 del(loss_refine)
 
+                # ------------------------ crnn ---------------------------
+
+                boxes, text_proposals = ctpn_detect_procedure((imgs[i].numpy()*255).transpose((1,2,0)).copy(), model, args.detect_type)
+                if len(boxes) != 0:
+                    print('some boxes are detected, crnn training!')
+                    boxes = np.array(boxes, dtype=np.int)
+
+                    gt_boxes_crnn, texts = get_bboxes_crnn(gt_files[gt_path_indexs[i]], img_scales[i].numpy()[0],im_shapes[i].numpy()[0])
+                    candidate_boxes = []
+                    candidate_texts = []
+                    for j in range(boxes.shape[0]):
+                        c_box = boxes[j, :8].reshape(4, 2)
+                        c_x_min = np.min(c_box[:, 0])
+                        c_y_min = np.min(c_box[:, 1])
+                        c_x_max = np.max(c_box[:, 0])
+                        c_y_max = np.max(c_box[:, 1])
+                        c_box = np.array([c_x_min, c_y_min, c_x_max, c_y_max])
+
+                        ious = np.array([iou_crnn(c_box, gt_box) for gt_box in gt_boxes_crnn])
+                        iou_max_index = np.argmax(ious)
+                        if ious[iou_max_index] > 0.5:
+                            candidate_boxes.append(c_box)
+                            candidate_texts.append(texts[iou_max_index])
+                    
+                    candidate_boxes = np.array(candidate_boxes)
+                    candidate_texts = np.array(candidate_texts)
+
+                    crnn_loss = crnn_trainer.train_batch(image_ori, candidate_boxes, candidate_texts)
+                    batch_loss_crnn.append(crnn_loss)
+
+
+                # ------------------------ crnn ---------------------------
+
+
             loss_tatal = sum(batch_loss_tatal)/len(batch_loss_tatal)
             loss_cls = sum(batch_loss_cls)/len(batch_loss_cls)
             loss_ver = sum(batch_loss_ver)/len(batch_loss_ver)
             loss_refine = sum(batch_loss_refine)/len(batch_loss_refine)
+            loss_crnn = sum(batch_loss_crnn)/len(batch_loss_crnn) if len(batch_loss_crnn)>0 else 0
 
             loss_tatal.backward()
 
@@ -129,27 +178,58 @@ def main(args):
             loss_cls_list.append(loss_cls.item())
             loss_ver_list.append(loss_ver.item())
             loss_refine_list.append(loss_refine.item())
+            loss_crnn_list.append(loss_crnn.item() if len(batch_loss_crnn)>0 else 0)
 
             if (batch_idx % args.show_step == 0):
-                log = '({epoch}/{epochs}/{batch_i}/{all_batch}) | loss_tatal: {loss1:.4f} | loss_cls: {loss2:.4f} | loss_ver: {loss3:.4f} | loss_refine: {loss4:.4f} | Lr: {lr}'.format(
+                log = '({epoch}/{epochs}/{batch_i}/{all_batch}) | loss_tatal: {loss1:.4f} | loss_cls: {loss2:.4f} | loss_ver: {loss3:.4f} | loss_refine: {loss4:.4f} | Lr: {lr} | loss_crnn: {loss5:.4f}'.format(
                     epoch=epoch, epochs=args.train_epochs, batch_i=batch_idx, all_batch=len(train_loader), loss1=loss_tatal.item(),
-                    loss2=loss_cls.item(), loss3=loss_ver.item(), loss4=loss_refine.item(), lr=scheduler.get_lr()[0])
+                    loss2=loss_cls.item(), loss3=loss_ver.item(), loss4=loss_refine.item(), lr=scheduler.get_lr()[0], loss5=loss_crnn.item() if len(batch_loss_crnn)>0 else 0)
                 print(log)
-                log_write.append([loss_tatal.item(),loss_cls.item(),loss_ver.item(),loss_refine.item(),scheduler.get_lr()[0]])
+                log_write.append([loss_tatal.item(),loss_cls.item(),loss_ver.item(),loss_refine.item(),scheduler.get_lr()[0], loss_crnn.item() if len(batch_loss_crnn)>0 else 0])
 
         print('--------------------------------------------------------------------------------------------------------')
-        log_write.set_split(['---------','----------','--------','----------','--------'])
+        log_write.set_split(['---------','----------','--------','----------','--------','--------'])
         print(
-            "epoch_loss_total:{loss1:.4f} | epoch_loss_cls:{loss2:.4f} | epoch_loss_ver:{loss3:.4f} | epoch_loss_ver:{loss4:.4f} | Lr:{lr}".
+            "epoch_loss_total:{loss1:.4f} | epoch_loss_cls:{loss2:.4f} | epoch_loss_ver:{loss3:.4f} | epoch_loss_ver:{loss4:.4f} | Lr:{lr} | epoch_loss_crnn: {loss5:.4f}".
             format(loss1=np.mean(loss_total_list), loss2=np.mean(loss_cls_list), loss3=np.mean(loss_ver_list),
-                   loss4=np.mean(loss_refine_list), lr=scheduler.get_lr()[0]))
-        log_write.append([np.mean(loss_total_list),np.mean(loss_cls_list),np.mean(loss_ver_list),np.mean(loss_refine_list),scheduler.get_lr()[0]])
+                   loss4=np.mean(loss_refine_list), lr=scheduler.get_lr()[0], loss5=np.mean(loss_crnn_list)))
+        log_write.append([np.mean(loss_total_list),np.mean(loss_cls_list),np.mean(loss_ver_list),np.mean(loss_refine_list),scheduler.get_lr()[0],np.mean(loss_crnn_list)])
         print('-------------------------------------------------------------------------------------------------------')
-        log_write.set_split(['---------','----------','--------','----------','--------'])
+        log_write.set_split(['---------','----------','--------','----------','--------','--------'])
         if(epoch % args.epoch_save==0 and epoch!=0):
             torch.save(model.state_dict(),os.path.join(args.checkpoint, 'ctpn_' + str(epoch) + '.pth'))
+            crnn_trainer.save_model(os.path.join(args.checkpoint, 'crnn_' + str(epoch) + '.pth'))
         scheduler.step()
     log_write.close()
+
+def ctpn_detect_procedure(img, ctpn_model, detect_type):
+    img_ori, (rh, rw) = resize_image_i(img)
+    h, w, c = img_ori.shape
+    im_info = np.array([h, w, c]).reshape([1, 3])
+    img = toTensorImage_i(img_ori, torch.cuda.is_available())
+    with torch.no_grad():
+        pre_score, pre_reg, refine_ment = ctpn_model(img)
+    score = pre_score.reshape((pre_score.shape[0], 10, 2, pre_score.shape[2], pre_score.shape[3])).squeeze(
+        0).permute(0, 2, 3, 1).reshape((-1, 2))
+    score = F.softmax(score, dim=1)
+    score = score.reshape((10, pre_reg.shape[2], -1, 2))
+
+    pre_score = score.permute(1, 2, 0, 3).reshape(pre_reg.shape[2], pre_reg.shape[3], -1).unsqueeze(
+        0).cpu().detach().numpy()
+    pre_reg = pre_reg.permute(0, 2, 3, 1).cpu().detach().numpy()
+    refine_ment = refine_ment.permute(0, 2, 3, 1).cpu().detach().numpy()
+
+    textsegs, _ = proposal_layer(pre_score, pre_reg, refine_ment, im_info)
+    scores = textsegs[:, 0]
+    textsegs = textsegs[:, 1:5]
+
+    textdetector = TextDetector(DETECT_MODE = detect_type)
+    boxes, text_proposals = textdetector.detect(textsegs, scores[:, np.newaxis], img_ori.shape[:2])
+
+    return boxes, text_proposals
+
+
+
 
 if __name__=="__main__":
     
@@ -168,6 +248,7 @@ if __name__=="__main__":
     parser.add_argument('--show_step', nargs='?', type=int, default=50, help='step to show')
     parser.add_argument('--epoch_save', nargs='?', type=int, default=5, help='how epoch to save')
     parser.add_argument('--checkpoint', default='./model_save', type=str, help='path to save model') 
+    parser.add_argument('--detect_type', default='O', type=str, help='detect_type')
     args = parser.parse_args()
     
     main(args)

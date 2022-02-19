@@ -17,7 +17,7 @@ import math
 import pdb 
 from torch.autograd import Variable
 
-LossCL = nn.CrossEntropyLoss().cuda()
+LossCL = nn.CrossEntropyLoss().cuda() if torch.cuda.is_available() else nn.CrossEntropyLoss()
 
 def smooth_l1_loss(inputs,
                    targets,
@@ -138,8 +138,8 @@ class CTPNLoss(nn.Module):
         predicted_locations = predicted_locations[mask.squeeze(0), :]
         gt_locations = gt_locations[mask.squeeze(0), :]
         
-        classification_loss = F.cross_entropy(confidence,labels, reduction='mean') if labels.numel() > 0 else Variable(torch.tensor(0.0).cuda(), requires_grad=True)
-        loss_cls = torch.clamp(classification_loss, 0, 5) if classification_loss.numel() > 0 else Variable(torch.tensor(0.0).cuda(), requires_grad=True)
+        classification_loss = F.cross_entropy(confidence,labels, reduction='mean') if labels.numel() > 0 else Variable(torch.tensor(0.0, device=labels.device), requires_grad=True)
+        loss_cls = torch.clamp(classification_loss, 0, 5) if classification_loss.numel() > 0 else Variable(torch.tensor(0.0, device=classification_loss.device), requires_grad=True)
         
         pos_mask = labels > 0
         predicted_locations = predicted_locations[pos_mask, :].reshape(-1, 4)
@@ -148,8 +148,8 @@ class CTPNLoss(nn.Module):
         gt_locations = torch.cat((gt_locations[:, 1].unsqueeze(1), gt_locations[:, 3].unsqueeze(1)), 1)
         predicted_locations = torch.cat((predicted_locations[:, 1].unsqueeze(1), predicted_locations[:, 3].unsqueeze(1)), 1)
         
-        loss_ver = smooth_l1_loss(predicted_locations, gt_locations) if gt_locations.numel() > 0 else Variable(torch.tensor(0.0).cuda(), requires_grad=True)
-        loss_ver = torch.clamp(loss_ver, 0, 5) if loss_ver.numel() > 0 else Variable(torch.tensor(0.0).cuda(), requires_grad=True)
+        loss_ver = smooth_l1_loss(predicted_locations, gt_locations) if gt_locations.numel() > 0 else Variable(torch.tensor(0.0, device=gt_locations.device), requires_grad=True)
+        loss_ver = torch.clamp(loss_ver, 0, 5) if loss_ver.numel() > 0 else Variable(torch.tensor(0.0, device=loss_ver.device), requires_grad=True)
              
          
         
